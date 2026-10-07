@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tester Calculator – Specification</title>
+  <style>
+    body { max-width: 900px; margin: 0 auto; padding: 24px 16px 80px; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; color: #1f2933; line-height: 1.5; }
+    h1 { border-bottom: 2px solid #2563eb; padding-bottom: 8px; }
+    h2 { margin-top: 40px; border-bottom: 1px solid #d1d5db; padding-bottom: 4px; }
+    h3 { margin-top: 28px; }
+    code, pre { font-family: ui-monospace, Menlo, monospace; font-size: 0.92em; }
+    code { background: #f1f5f9; padding: 1px 5px; border-radius: 4px; }
+    pre { background: #f1f5f9; padding: 12px; border-radius: 6px; overflow-x: auto; }
+    pre code { background: none; padding: 0; }
+    table { border-collapse: collapse; width: 100%; margin: 12px 0; }
+    th, td { border: 1px solid #d1d5db; padding: 6px 10px; text-align: left; vertical-align: top; }
+    th { background: #f8fafc; }
+    nav ul { columns: 2; padding-left: 20px; }
+    .note { background: #eff6ff; border-left: 4px solid #2563eb; padding: 8px 12px; margin: 12px 0; }
+    .method { display: inline-block; font-weight: 700; padding: 1px 8px; border-radius: 4px; color: white; font-size: 0.85em; margin-right: 6px; }
+    .get { background: #16a34a; } .post { background: #2563eb; } .delete { background: #b91c1c; }
+  </style>
+</head>
+<body>
+<h1>Tester Calculator – Functional Specification</h1>
+<p>This document is the single source of truth for the behaviour of the Tester Calculator application. The <a href="/docs/api.html">interactive API explorer</a> and the raw <a href="/openapi.yaml">OpenAPI specification</a> describe the same contract in machine-readable form. Anything the running application does differently from what is written here is a defect.</p>
+
+<nav>
+  <strong>Contents</strong>
+  <ul>
+    <li><a href="#overview">1. Overview</a></li>
+    <li><a href="#running">2. Running the application</a></li>
+    <li><a href="#auth">3. Users and authentication</a></li>
+    <li><a href="#equations">4. Equation grammar</a></li>
+    <li><a href="#priority">5. Priorities, delays and status lifecycle</a></li>
+    <li><a href="#endpoints">6. REST endpoints</a></li>
+    <li><a href="#errors">7. Error responses</a></li>
+    <li><a href="#ui">8. Web UI</a></li>
+    <li><a href="#testing">9. Suggested test areas</a></li>
+  </ul>
+</nav>
+
+<h2 id="overview">1. Overview</h2>
+<p>The calculator evaluates arithmetic equations <em>asynchronously</em>. A client submits an equation together with a priority and immediately receives an <strong>operation id</strong>. The result is computed in the background after a delay that depends on the priority. The client polls the operation by id until the result (or an evaluation error) is available.</p>
+<div class="note">The service keeps all operations in memory. Restarting the application clears every operation.</div>
+
+<h2 id="running">2. Running the application</h2>
+<pre><code>./gradlew bootRun</code></pre>
+<p>The application listens on <code>http://localhost:8080</code>. Pages:</p>
+<table>
+  <tr><th>URL</th><th>Purpose</th></tr>
+  <tr><td><code>/</code></td><td>Login page</td></tr>
+  <tr><td><code>/calculator.html</code></td><td>Calculator page (requires a prior login in the same browser tab)</td></tr>
+  <tr><td><code>/docs/</code></td><td>This specification</td></tr>
+  <tr><td><code>/docs/api.html</code></td><td>Swagger UI for the OpenAPI contract</td></tr>
+  <tr><td><code>/openapi.yaml</code></td><td>OpenAPI 3 contract</td></tr>
+</table>
+
+<h2 id="auth">3. Users and authentication</h2>
+<p>Every endpoint under <code>/api/</code> requires <strong>HTTP Basic</strong> authentication, except <code>GET /api/health</code>. Static pages (<code>/</code>, <code>/calculator.html</code>, <code>/docs/**</code>, <code>/openapi.yaml</code>, <code>/js/**</code>, <code>/css/**</code>) are public.</p>
+<table>
+  <tr><th>Username</th><th>Password</th></tr>
+  <tr><td><code>alice</code></td><td><code>alice123</code></td></tr>
+  <tr><td><code>bob</code></td><td><code>bob123</code></td></tr>
+  <tr><td><code>carol</code></td><td><code>carol123</code></td></tr>
+</table>
+<ul>
+  <li>Usernames and passwords are <strong>case-sensitive</strong>.</li>
+  <li>Missing or invalid credentials produce <code>401</code> with body <code>{"code":"UNAUTHORIZED","message":"Valid credentials are required"}</code>.</li>
+  <li>Operations are <strong>private to the user who created them</strong>. Reading, listing or deleting an operation that belongs to another user behaves exactly like an unknown id: <code>404 NOT_FOUND</code>.</li>
+</ul>
+<pre><code>curl -u alice:alice123 http://localhost:8080/api/me
+{"username":"alice"}</code></pre>
+
+<h2 id="equations">4. Equation grammar</h2>
+<p>An equation is a string of at most <strong>200 characters</strong> (after no trimming; whitespace counts). It must not be blank.</p>
+<table>
+  <tr><th>Element</th><th>Rule</th><th>Examples</th></tr>
+  <tr><td>Numbers</td><td>Non-negative integers or decimals with <code>.</code> as the separator. A number has at most one dot. Leading dots are allowed (<code>.5</code>).</td><td><code>42</code>, <code>3.14</code>, <code>.5</code></td></tr>
+  <tr><td>Operators</td><td><code>+</code> <code>-</code> <code>*</code> <code>/</code></td><td><code>2*3</code></td></tr>
+  <tr><td>Parentheses</td><td>Any depth; must be balanced.</td><td><code>(1+2)*(3+4)</code></td></tr>
+  <tr><td>Unary minus</td><td>Allowed before a number or an opening parenthesis, anywhere a value is expected, including the start of the equation.</td><td><code>-3+5</code>, <code>2*-3</code>, <code>-(2+3)</code></td></tr>
+  <tr><td>Whitespace</td><td>Ignored between tokens.</td><td><code> 6 + 7 </code></td></tr>
+</table>
+<h3>Evaluation rules</h3>
+<ul>
+  <li><code>*</code> and <code>/</code> bind tighter than <code>+</code> and <code>-</code>.</li>
+  <li>All binary operators are <strong>left-associative</strong>: <code>10-2-3</code> is <code>(10-2)-3 = 5</code>; <code>8/4/2</code> is <code>1.0</code>.</li>
+  <li>Division is <strong>real-number</strong> division: <code>7/2 = 3.5</code>, <code>1/3 = 0.3333333333333333</code>.</li>
+  <li>Results are returned as JSON numbers with full double precision. Integral results are serialized with a <code>.0</code> suffix (<code>82.0</code>, <code>-5.0</code>); compare them numerically, not as strings.</li>
+</ul>
+<h3>Examples</h3>
+<table>
+  <tr><th>Equation</th><th>Result</th></tr>
+  <tr><td><code>6+7+(3+4*5) * 3</code></td><td><code>82.0</code></td></tr>
+  <tr><td><code>2+3*4</code></td><td><code>14.0</code></td></tr>
+  <tr><td><code>10-2-3</code></td><td><code>5.0</code></td></tr>
+  <tr><td><code>7/2</code></td><td><code>3.5</code></td></tr>
+  <tr><td><code>-(2+3)*2</code></td><td><code>-10.0</code></td></tr>
+  <tr><td><code>0.1+0.2</code></td><td><code>0.30000000000000004</code></td></tr>
+</table>
+<h3>Syntax errors (rejected at submission with <code>400 INVALID_EQUATION</code>)</h3>
+<table>
+  <tr><th>Equation</th><th>Reason</th><th><code>position</code></th></tr>
+  <tr><td><code>2++3</code></td><td>Unexpected token <code>+</code></td><td>2</td></tr>
+  <tr><td><code>5+</code></td><td>Unexpected end of equation</td><td>2</td></tr>
+  <tr><td><code>(1+2</code></td><td>Expected <code>)</code></td><td>4</td></tr>
+  <tr><td><code>1+2)</code></td><td>Unexpected token <code>)</code></td><td>3</td></tr>
+  <tr><td><code>2^3</code></td><td>Unexpected character <code>^</code></td><td>1</td></tr>
+  <tr><td><code>1.2.3</code></td><td>Malformed number</td><td>3</td></tr>
+  <tr><td><code>abc</code></td><td>Unexpected character <code>a</code></td><td>0</td></tr>
+</table>
+<p><code>position</code> is the zero-based character offset in the submitted string where the problem was detected.</p>
+<h3>Evaluation errors (reported asynchronously)</h3>
+<p>Equations that are syntactically valid but cannot be evaluated are accepted (<code>201</code>) and finish with status <code>FAILED</code>. The only evaluation error is division by zero:</p>
+<pre><code>{"code":"DIVISION_BY_ZERO","message":"Division by zero"}</code></pre>
+<p>This applies to <code>1/0</code>, <code>0/0</code>, <code>5/(2-2)</code> and so on.</p>
+
+<h2 id="priority">5. Priorities, delays and status lifecycle</h2>
+<table>
+  <tr><th>Priority</th><th>Delay until result</th></tr>
+  <tr><td><code>HIGH</code></td><td>1 second</td></tr>
+  <tr><td><code>MEDIUM</code></td><td>5 seconds</td></tr>
+  <tr><td><code>LOW</code></td><td>15 seconds</td></tr>
+</table>
+<p>If <code>priority</code> is omitted from the request body it defaults to <code>MEDIUM</code>. Any other value is rejected with <code>400 VALIDATION_ERROR</code>.</p>
+<p>Status lifecycle of an operation:</p>
+<table>
+  <tr><th>Status</th><th>When</th></tr>
+  <tr><td><code>PENDING</code></td><td>From submission until half of the delay has elapsed.</td></tr>
+  <tr><td><code>IN_PROGRESS</code></td><td>From half of the delay until the full delay has elapsed.</td></tr>
+  <tr><td><code>DONE</code></td><td>Evaluation succeeded; <code>result</code> is set, <code>completedAt</code> is set.</td></tr>
+  <tr><td><code>FAILED</code></td><td>Evaluation failed; <code>error</code> is set, <code>result</code> is <code>null</code>, <code>completedAt</code> is set.</td></tr>
+</table>
+<p>The submission response contains <code>estimatedCompletionAt</code> = <code>createdAt + delay</code>. A tolerance of a few hundred milliseconds on top of the delay is acceptable; results must never be available <em>before</em> the delay.</p>
+
+<h2 id="endpoints">6. REST endpoints</h2>
+<p>All request and response bodies are JSON. Timestamps are ISO-8601 in UTC.</p>
+
+<h3><span class="method post">POST</span><code>/api/operations</code> – submit an equation</h3>
+<p>Request body:</p>
+<pre><code>{"equation": "6+7+(3+4*5) * 3", "priority": "HIGH"}</code></pre>
+<table>
+  <tr><th>Field</th><th>Type</th><th>Required</th><th>Rule</th></tr>
+  <tr><td><code>equation</code></td><td>string</td><td>yes</td><td>Not blank, 1–200 characters, valid per section 4</td></tr>
+  <tr><td><code>priority</code></td><td><code>HIGH | MEDIUM | LOW</code></td><td>no</td><td>Defaults to <code>MEDIUM</code></td></tr>
+</table>
+<p>Responses:</p>
+<table>
+  <tr><th>Status</th><th>Body</th></tr>
+  <tr><td><code>201 Created</code></td><td><pre><code>{
+  "id": "3f1c2a3e-9b1a-4e2b-8f0c-1a2b3c4d5e6f",
+  "status": "PENDING",
+  "priority": "HIGH",
+  "estimatedCompletionAt": "2026-10-07T10:00:01Z"
+}</code></pre></td></tr>
+  <tr><td><code>400 Bad Request</code></td><td><code>INVALID_EQUATION</code> (with <code>position</code>) or <code>VALIDATION_ERROR</code> (blank equation, unknown priority, malformed JSON)</td></tr>
+  <tr><td><code>401 Unauthorized</code></td><td><code>UNAUTHORIZED</code></td></tr>
+</table>
+
+<h3><span class="method get">GET</span><code>/api/operations/{id}</code> – get an operation and its result</h3>
+<table>
+  <tr><th>Status</th><th>When</th><th>Body / headers</th></tr>
+  <tr><td><code>200 OK</code></td><td>Status is <code>DONE</code> or <code>FAILED</code></td><td><pre><code>{
+  "id": "3f1c2a3e-9b1a-4e2b-8f0c-1a2b3c4d5e6f",
+  "equation": "6+7+(3+4*5) * 3",
+  "priority": "HIGH",
+  "status": "DONE",
+  "result": 82.0,
+  "error": null,
+  "createdAt": "2026-10-07T10:00:00Z",
+  "completedAt": "2026-10-07T10:00:01Z"
+}</code></pre></td></tr>
+  <tr><td><code>202 Accepted</code></td><td>Status is <code>PENDING</code> or <code>IN_PROGRESS</code></td><td>Header <code>Retry-After: &lt;seconds&gt;</code> (at least 1) and body <pre><code>{"id": "…", "status": "PENDING", "retryAfterSeconds": 4}</code></pre></td></tr>
+  <tr><td><code>400 Bad Request</code></td><td><code>id</code> is not a UUID</td><td><code>VALIDATION_ERROR</code></td></tr>
+  <tr><td><code>401 Unauthorized</code></td><td>No/invalid credentials</td><td><code>UNAUTHORIZED</code></td></tr>
+  <tr><td><code>404 Not Found</code></td><td>Unknown id, or the operation belongs to another user</td><td><code>NOT_FOUND</code></td></tr>
+</table>
+
+<h3><span class="method get">GET</span><code>/api/operations?page=0&amp;size=20</code> – list my operations</h3>
+<p>Returns the caller's operations, newest first, regardless of status. Items use the same shape as the <code>200</code> body above (pending operations have <code>result</code>, <code>error</code> and <code>completedAt</code> set to <code>null</code>).</p>
+<table>
+  <tr><th>Parameter</th><th>Default</th><th>Rule</th></tr>
+  <tr><td><code>page</code></td><td><code>0</code></td><td><strong>Zero-based</strong> page index, ≥ 0. <code>page=0</code> returns the newest <code>size</code> operations, <code>page=1</code> the next ones.</td></tr>
+  <tr><td><code>size</code></td><td><code>20</code></td><td>1–100</td></tr>
+</table>
+<pre><code>{"items": [ … ], "page": 0, "size": 20, "total": 37}</code></pre>
+<p><code>total</code> is the total number of the caller's operations. A page beyond the end returns an empty <code>items</code> array. Invalid parameters produce <code>400 VALIDATION_ERROR</code>.</p>
+
+<h3><span class="method delete">DELETE</span><code>/api/operations/{id}</code> – delete my operation</h3>
+<table>
+  <tr><th>Status</th><th>When</th></tr>
+  <tr><td><code>204 No Content</code></td><td>Deleted (any status, including pending ones)</td></tr>
+  <tr><td><code>401 Unauthorized</code></td><td>No/invalid credentials</td></tr>
+  <tr><td><code>404 Not Found</code></td><td>Unknown id or the operation belongs to another user</td></tr>
+</table>
+<p>After deletion, <code>GET</code> on the same id returns <code>404</code> and the operation disappears from the list.</p>
+
+<h3><span class="method get">GET</span><code>/api/me</code> – who am I</h3>
+<p><code>200</code> with <code>{"username":"alice"}</code>; <code>401</code> otherwise. The UI uses this endpoint to validate credentials on login.</p>
+
+<h3><span class="method get">GET</span><code>/api/health</code> – liveness</h3>
+<p>Public. Always <code>200</code> with <code>{"status":"UP"}</code>.</p>
+
+<h2 id="errors">7. Error responses</h2>
+<p>Every error body has the shape <code>{"code": "…", "message": "…"}</code>; <code>INVALID_EQUATION</code> additionally carries <code>position</code>.</p>
+<table>
+  <tr><th>HTTP</th><th><code>code</code></th><th>Meaning</th></tr>
+  <tr><td>400</td><td><code>INVALID_EQUATION</code></td><td>Equation failed to parse (section 4)</td></tr>
+  <tr><td>400</td><td><code>VALIDATION_ERROR</code></td><td>Blank equation, equation longer than 200 characters, unknown priority, malformed JSON, invalid paging parameters, id not a UUID</td></tr>
+  <tr><td>401</td><td><code>UNAUTHORIZED</code></td><td>Missing or wrong credentials</td></tr>
+  <tr><td>404</td><td><code>NOT_FOUND</code></td><td>No operation with this id belongs to the caller</td></tr>
+</table>
+
+<h2 id="ui">8. Web UI</h2>
+<p>The UI is a thin client over the API. Element identifiers (<code>id</code> and <code>data-testid</code>) are stable and intended for automation.</p>
+<h3>Login page (<code>/</code>)</h3>
+<table>
+  <tr><th>Element</th><th><code>data-testid</code></th><th>Behaviour</th></tr>
+  <tr><td>Username input</td><td><code>username-input</code></td><td></td></tr>
+  <tr><td>Password input</td><td><code>password-input</code></td><td></td></tr>
+  <tr><td>Sign in button</td><td><code>login-button</code></td><td>Calls <code>GET /api/me</code> with the entered credentials. On <code>200</code>: stores the credentials for the browser tab and navigates to <code>/calculator.html</code>. On <code>401</code>: shows "Invalid username or password" in <code>login-error</code>. Empty fields show "Username and password are required".</td></tr>
+</table>
+<h3>Calculator page (<code>/calculator.html</code>)</h3>
+<p>Opening the page without having logged in redirects to <code>/</code>. The header shows the logged-in username (<code>current-user</code>).</p>
+<table>
+  <tr><th>Element</th><th><code>data-testid</code></th><th>Behaviour</th></tr>
+  <tr><td>Equation input</td><td><code>equation-input</code></td><td></td></tr>
+  <tr><td>Priority select</td><td><code>priority-select</code></td><td>Options <code>HIGH</code>, <code>MEDIUM</code> (preselected), <code>LOW</code></td></tr>
+  <tr><td>Submit button</td><td><code>submit-button</code></td><td>Calls <code>POST /api/operations</code>. On success shows the new id in <code>submitted-id</code>, fills <code>operation-id-input</code> with it and refreshes the table. On <code>400</code> shows the server <code>message</code> in <code>submit-error</code>.</td></tr>
+  <tr><td>Operation id input</td><td><code>operation-id-input</code></td><td></td></tr>
+  <tr><td>Get result button</td><td><code>get-result-button</code></td><td>Calls <code>GET /api/operations/{id}</code>. Shows the status in <code>result-status</code>. <code>DONE</code>: shows the number in <code>result-value</code>. <code>FAILED</code>: shows <code>CODE: message</code> in <code>result-value</code>. <code>PENDING</code>/<code>IN_PROGRESS</code>: shows "Not ready yet" in <code>result-value</code>. Errors (<code>400</code>/<code>404</code>) show the server <code>message</code> in <code>result-error</code>.</td></tr>
+  <tr><td>Refresh button</td><td><code>refresh-button</code></td><td>Reloads the table from <code>GET /api/operations?page=0&amp;size=20</code></td></tr>
+  <tr><td>Operations table</td><td><code>operations-table</code></td><td>One <code>operation-row</code> per operation with id, equation, priority, status, result (number for <code>DONE</code>, error code for <code>FAILED</code>, empty otherwise) and a <code>delete-button</code> that calls <code>DELETE</code> and refreshes. Shows <code>operations-empty</code> when there are none.</td></tr>
+  <tr><td>Log out button</td><td><code>logout-button</code></td><td>Clears the stored credentials and navigates to <code>/</code>. Using the browser Back button afterwards must redirect to the login page again.</td></tr>
+</table>
+<p>Any <code>401</code> received by the calculator page redirects to the login page.</p>
+
+<h2 id="testing">9. Suggested test areas</h2>
+<ul>
+  <li><strong>Authentication</strong>: every protected endpoint with no, wrong and correct credentials; case sensitivity; public endpoints.</li>
+  <li><strong>Isolation</strong>: one user cannot read, list or delete another user's operations.</li>
+  <li><strong>Submission</strong>: status code, response shape, validation of each field, boundary of the 200-character limit, default priority.</li>
+  <li><strong>Parser</strong>: precedence, associativity, decimals, unary minus, parentheses, each documented syntax error and its <code>position</code>.</li>
+  <li><strong>Evaluation</strong>: results of the documented examples, division by zero, precision.</li>
+  <li><strong>Timing</strong>: response codes while pending (<code>202</code> + <code>Retry-After</code>), status transitions, delay per priority, <code>estimatedCompletionAt</code>.</li>
+  <li><strong>Listing</strong>: ordering, paging boundaries, <code>total</code>, parameter validation.</li>
+  <li><strong>Deletion</strong>: effect on <code>GET</code> and on the list; deleting twice.</li>
+  <li><strong>UI</strong>: login flow, error messages, submit/get-result flows, table rendering, logout.</li>
+  <li><strong>Contract</strong>: compare real responses against <a href="/openapi.yaml">openapi.yaml</a>.</li>
+</ul>
+</body>
+</html>

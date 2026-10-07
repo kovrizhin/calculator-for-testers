@@ -1,0 +1,306 @@
+openapi: 3.0.3
+info:
+  title: Tester Calculator API
+  version: 1.0.0
+  description: |
+    Asynchronous calculator used for QA training. Submit an equation, receive an operation id,
+    then fetch the result by id once the operation has completed. Completion time depends on the
+    priority given at submission.
+
+    All `/api/**` endpoints except `/api/health` require HTTP Basic authentication.
+    A user can only see, list and delete their own operations; another user's operation id
+    behaves exactly like an unknown id (`404 NOT_FOUND`).
+servers:
+  - url: http://localhost:8080
+security:
+  - basicAuth: []
+tags:
+  - name: operations
+  - name: account
+paths:
+  /api/operations:
+    post:
+      tags: [operations]
+      summary: Submit an equation for asynchronous evaluation
+      operationId: submitOperation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubmitOperationRequest'
+            examples:
+              high:
+                value: { equation: "6+7+(3+4*5) * 3", priority: HIGH }
+              default:
+                summary: Priority omitted, defaults to MEDIUM
+                value: { equation: "10 - 2 - 3" }
+      responses:
+        '201':
+          description: Operation accepted and scheduled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperationAccepted'
+        '400':
+          description: Invalid equation or request body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                syntax:
+                  value: { code: INVALID_EQUATION, message: "Unexpected token ')'", position: 4 }
+                blank:
+                  value: { code: VALIDATION_ERROR, message: "equation: equation must not be blank" }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    get:
+      tags: [operations]
+      summary: List the caller's operations, newest first
+      operationId: listOperations
+      parameters:
+        - name: page
+          in: query
+          description: Zero-based page index
+          schema: { type: integer, minimum: 0, default: 0 }
+        - name: size
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      responses:
+        '200':
+          description: One page of the caller's operations
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperationPage'
+        '400':
+          description: Invalid paging parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/operations/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [operations]
+      summary: Get an operation and its result
+      operationId: getOperation
+      responses:
+        '200':
+          description: Operation has finished (`DONE` or `FAILED`)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Operation'
+              examples:
+                done:
+                  value:
+                    id: 3f1c2a3e-9b1a-4e2b-8f0c-1a2b3c4d5e6f
+                    equation: "6+7+(3+4*5) * 3"
+                    priority: HIGH
+                    status: DONE
+                    result: 82.0
+                    error: null
+                    createdAt: "2026-10-07T10:00:00Z"
+                    completedAt: "2026-10-07T10:00:01Z"
+                failed:
+                  value:
+                    id: 3f1c2a3e-9b1a-4e2b-8f0c-1a2b3c4d5e6f
+                    equation: "1/0"
+                    priority: HIGH
+                    status: FAILED
+                    result: null
+                    error: { code: DIVISION_BY_ZERO, message: "Division by zero" }
+                    createdAt: "2026-10-07T10:00:00Z"
+                    completedAt: "2026-10-07T10:00:01Z"
+        '202':
+          description: Operation is still `PENDING` or `IN_PROGRESS`; retry later
+          headers:
+            Retry-After:
+              description: Seconds to wait before retrying
+              schema: { type: integer, minimum: 1 }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OperationPending'
+        '400':
+          description: Id is not a UUID
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      tags: [operations]
+      summary: Delete one of the caller's operations
+      operationId: deleteOperation
+      responses:
+        '204':
+          description: Deleted
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/me:
+    get:
+      tags: [account]
+      summary: Return the authenticated user
+      operationId: me
+      responses:
+        '200':
+          description: Current user
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [username]
+                properties:
+                  username: { type: string, example: alice }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/health:
+    get:
+      tags: [account]
+      summary: Liveness check (no authentication)
+      operationId: health
+      security: []
+      responses:
+        '200':
+          description: Service is up
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { type: string, enum: [UP] }
+components:
+  securitySchemes:
+    basicAuth:
+      type: http
+      scheme: basic
+  responses:
+    Unauthorized:
+      description: Missing or invalid credentials
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example: { code: UNAUTHORIZED, message: "Valid credentials are required" }
+    NotFound:
+      description: No operation with this id belongs to the caller
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example: { code: NOT_FOUND, message: "Operation 3f1c2a3e-9b1a-4e2b-8f0c-1a2b3c4d5e6f not found" }
+  schemas:
+    Priority:
+      type: string
+      enum: [HIGH, MEDIUM, LOW]
+      description: |
+        Determines how long evaluation takes: HIGH = 1 s, MEDIUM = 5 s, LOW = 15 s.
+    OperationStatus:
+      type: string
+      enum: [PENDING, IN_PROGRESS, DONE, FAILED]
+      description: |
+        PENDING immediately after submission, IN_PROGRESS once half of the delay has elapsed,
+        then DONE (with `result`) or FAILED (with `error`).
+    SubmitOperationRequest:
+      type: object
+      required: [equation]
+      properties:
+        equation:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: |
+            Arithmetic expression. Supports integers and decimals, `+ - * /`, parentheses,
+            unary minus and whitespace. Standard precedence, left associativity.
+          example: "6+7+(3+4*5) * 3"
+        priority:
+          allOf:
+            - $ref: '#/components/schemas/Priority'
+          default: MEDIUM
+    OperationAccepted:
+      type: object
+      required: [id, status, priority, estimatedCompletionAt]
+      properties:
+        id: { type: string, format: uuid }
+        status:
+          $ref: '#/components/schemas/OperationStatus'
+        priority:
+          $ref: '#/components/schemas/Priority'
+        estimatedCompletionAt: { type: string, format: date-time }
+    OperationPending:
+      type: object
+      required: [id, status, retryAfterSeconds]
+      properties:
+        id: { type: string, format: uuid }
+        status:
+          $ref: '#/components/schemas/OperationStatus'
+        retryAfterSeconds: { type: integer, minimum: 1 }
+    Operation:
+      type: object
+      required: [id, equation, priority, status, result, error, createdAt, completedAt]
+      properties:
+        id: { type: string, format: uuid }
+        equation: { type: string }
+        priority:
+          $ref: '#/components/schemas/Priority'
+        status:
+          $ref: '#/components/schemas/OperationStatus'
+        result:
+          type: number
+          nullable: true
+          description: Numeric result, full double precision. `null` unless status is DONE.
+        error:
+          nullable: true
+          allOf:
+            - $ref: '#/components/schemas/OperationError'
+          description: '`null` unless status is FAILED.'
+        createdAt: { type: string, format: date-time }
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+    OperationError:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum: [DIVISION_BY_ZERO]
+        message: { type: string }
+    OperationPage:
+      type: object
+      required: [items, page, size, total]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Operation'
+        page: { type: integer }
+        size: { type: integer }
+        total: { type: integer, format: int64 }
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum: [INVALID_EQUATION, VALIDATION_ERROR, UNAUTHORIZED, NOT_FOUND]
+        message: { type: string }
+        position:
+          type: integer
+          description: Zero-based character offset of the problem; only for INVALID_EQUATION.

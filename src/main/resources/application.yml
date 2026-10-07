@@ -1,0 +1,17 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: tester-calculator
+  jackson:
+    default-property-inclusion: always
+  web:
+    resources:
+      cache:
+        cachecontrol:
+          no-cache: true
+
+logging:
+  level:
+    io.paradym.testercalculator: INFO
