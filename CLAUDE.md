@@ -10,7 +10,7 @@ Rules that follow from that purpose:
 
 - **Do not fix a bug listed in `BUGS.md` unless explicitly asked.** If you change behaviour, update `BUGS.md`, `openapi.yaml` and `docs/index.html` together so the three stay consistent with each other (the docs are the source of truth the trainees test against).
 - **No comments in source code** (Java, JS, HTML, CSS); the code must not hint at the planted bugs.
-- Smoke tests in `src/test` must keep passing *with* the bugs in place; never add a test that asserts the buggy behaviour or the documented-but-unimplemented behaviour.
+- Smoke tests in `src/test` and the example tests in `tests/robot` and `tests/playwright` must keep passing *with* the bugs in place; never add a test that asserts the buggy behaviour or the documented-but-unimplemented behaviour (`BUGS.md` lists what to avoid).
 - This is a standalone single-module Spring Boot app; it does not use the Paradym platform stack (no JooQ, Liquibase, Kafka, outbox, Temporal, gRPC). Ignore those parts of the workspace rules here.
 
 ## Commands
@@ -20,6 +20,9 @@ Rules that follow from that purpose:
 ./gradlew test                                    # smoke tests
 ./gradlew test --tests "io.paradym.testercalculator.OperationFlowSmokeTest"
 ./gradlew bootRun                                 # http://localhost:8080
+
+cd tests/robot && .venv/bin/robot -d results tests            # API tests (needs running app; venv per tests/robot/README.md)
+cd tests/playwright && npm test                               # UI tests (starts the app itself if needed)
 ```
 
 JDK 25 via Gradle toolchain (foojay resolver). No Docker or database required.
@@ -32,5 +35,7 @@ JDK 25 via Gradle toolchain (foojay resolver). No Docker or database required.
 - `api/` — controllers, DTO records, `ApiExceptionHandler` producing `{code,message[,position]}` bodies.
 - `config/SecurityConfig` — HTTP Basic, in-memory users, permit rules, JSON 401 entry point.
 - `static/` — `index.html` (login), `calculator.html`, `js/app.js`, `css/style.css`, `docs/`, `openapi.yaml`.
+- `tests/robot/` — Robot Framework API project: `variables.py`, `resources/api.resource` (session + endpoint keywords, `Wait Until Operation Completes`), `tests/*.robot`.
+- `tests/playwright/` — Playwright TS UI project: page objects in `src/pages/`, fixtures (`loggedIn`) in `src/fixtures.ts`, specs in `tests/`. Import `test`/`expect` from `src/fixtures`.
 
 Spring Boot 4 notes: Jackson 3 (`tools.jackson.databind.ObjectMapper`), `@AutoConfigureMockMvc` lives in `org.springframework.boot.webmvc.test.autoconfigure` and needs `spring-boot-starter-webmvc-test`.

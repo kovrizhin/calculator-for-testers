@@ -8,3 +8,9 @@ build/
 bin/
 out/
 .DS_Store
+tests/robot/.venv/
+tests/robot/results/
+tests/playwright/node_modules/
+tests/playwright/test-results/
+tests/playwright/playwright-report/
+tests/playwright/blob-report/

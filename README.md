@@ -46,3 +46,14 @@ curl -u alice:alice123 -X DELETE http://localhost:8080/api/operations/<id>
 ```
 
 The repository intentionally contains only a handful of smoke tests. The full test suite is the trainees' job.
+
+## Test projects
+
+Two ready-to-run test projects live under `tests/`; each has its own README with setup details and a few passing example tests to copy from.
+
+| Project | Scope | Run |
+|---|---|---|
+| [`tests/robot`](tests/robot/README.md) | REST API, Robot Framework + RequestsLibrary | `cd tests/robot && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/robot -d results tests` |
+| [`tests/playwright`](tests/playwright/README.md) | Web UI, Playwright + TypeScript | `cd tests/playwright && npm install && npx playwright install chromium && npm test` |
+
+The Robot suite expects the application to be running; the Playwright config starts it automatically when it is not. Both read `CALC_BASE_URL` to target another host.
